@@ -7,9 +7,6 @@
 
 #include <cxxopts.hpp>
 
-float x_offset = 0.0;
-float y_offset = 0.0;
-
 // Calculate ticks per rotation (one stitch)
 // facts (for my setup):
 // 200 steps per one motor rotation
@@ -36,13 +33,83 @@ const int ticks_hoop_not_moving = (ticks_per_stitch / 4) * 3 + ticks_per_stitch 
 // will properly work.
 // You have to try it out.
 // This value works on my setup.
-const int max_speed = 900;
+const int max_speed = 100;
+
+// 20um per tooth ... 16 teeth pulley
+// this is only for the steppers which move the hoop
+const int um_per_stepper_relevation = 20*16;
+
+// 200 steps per rotation and 16 microsteps
+// this Value belongs to all three steppers
+const int ticks_per_stepper_relevation = 200*16;
+
+
+float x_offset = 0.0;
+float y_offset = 0.0;
+uint32_t command_index = 0;
+
+struct MoveValues
+{
+    uint32_t stepCount{};
+    uint32_t stepInterval{};
+};
+
+struct Command
+{
+    const uint32_t magic{0xDECAFBAD};
+    uint32_t commandIdx{};
+    MoveValues xAxis{};
+    MoveValues yAxis{};
+    MoveValues motor{};
+    enum : uint16_t
+    {
+        none = 0,
+        move = 'm',
+        enable_steppers = 'e',
+        disable_steppers = 'd',
+    } command{none};
+
+    uint16_t checksum{0xFFFF}; // initial invalid
+
+    const uint8_t* getRaw()
+    {
+        checksum = 0;
+        auto current = reinterpret_cast<const char *>(this);
+        auto end = reinterpret_cast<const char *>(this) + (sizeof(Command) - sizeof(checksum));
+        do
+        {
+            checksum += *current++;
+        } while (current != end);
+        return reinterpret_cast<const uint8_t*>(this);
+    }
+
+    size_t getRawSize() const
+    {
+        return sizeof(*this);
+    }
+};
+static_assert(sizeof(Command) == 36);
 
 void send_one(serial::Serial &ser, const stitch &s, int mot)
 {
+    Command theCommand{};
+
+    theCommand.commandIdx = command_index++;
+
+    theCommand.motor.stepCount = mot;
+    
+    // for corexy 
+    theCommand.xAxis.stepCount = ((s.x - s.y) * 2 * ticks_per_stepper_relevation) / um_per_stepper_relevation;
+    theCommand.yAxis.stepCount = ((s.x + s.y) * 2 * ticks_per_stepper_relevation) / um_per_stepper_relevation;
+
+    theCommand.motor.stepInterval = 60000000/(s.speed*ticks_per_stitch);
+    auto time_span_stitch = theCommand.motor.stepCount*theCommand.motor.stepInterval;
+    theCommand.xAxis.stepInterval = time_span_stitch / theCommand.xAxis.stepCount;
+    theCommand.yAxis.stepInterval = time_span_stitch / theCommand.yAxis.stepCount;
+
     auto cmmd = fmt::format(">m{};{};{};{};", (x_offset + s.x) / 10, (y_offset + s.y) / 10, int(mot), s.speed);
     std::cout << (cmmd) << "\n";
-    ser.write(cmmd);
+    ser.write(theCommand.getRaw(), theCommand.getRawSize());
     ser.flush();
     while (ser.available() < 1)
     {
@@ -96,7 +163,7 @@ void calc_speed(pes &pattern)
                 //     current
                 //     position
 
-                current.speed = 100;
+                current.speed = 60;
 
                 // go backwards from current position -> ramp down
                 stitch previous = current;
@@ -107,7 +174,7 @@ void calc_speed(pes &pattern)
 
                     auto &curent_stitch = block.stitches[idx_reverse];
 
-                    int val = previous.speed + 100;
+                    int val = previous.speed + 5;
 
                     if (val > max_speed)
                         val = max_speed;
@@ -132,7 +199,7 @@ void calc_speed(pes &pattern)
                     
                     auto &current_stitch = block.stitches[idx_forward];
                     
-                    int val = previous.speed + 100;
+                    int val = previous.speed + 5;
                     
                     if (val > max_speed)
                         val = max_speed;
