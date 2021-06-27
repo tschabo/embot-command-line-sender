@@ -231,8 +231,9 @@ int main(int argc, char **argv)
         buffer = {};
 
         calc_speed(pattern);
-
-        ser.write(">e");
+        Command enable{};
+        enable.command = Command::enable_steppers;
+        ser.write(enable.getRaw(), enable.getRawSize());
         sleep(1);
         while (ser.available() < 1)
         {
@@ -266,7 +267,10 @@ int main(int argc, char **argv)
                 }
             }
         }
-        ser.write(">d");
+
+        Command disable{};
+        disable.command = Command::disable_steppers;
+        ser.write(disable.getRaw(), disable.getRawSize());
         while (ser.available() < 1)
         {
         }
